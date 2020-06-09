@@ -1,0 +1,677 @@
+---
+title: "Housing"
+author: "Spandana Makeneni"
+output: 
+  html_document:
+    toc: true 
+    toc_depth: 3
+    df_print: kable
+    toc_float: 
+        collapsed: TRUE
+        smooth_scroll: FALSE
+    number_sections: FALSE
+    messages: FALSE
+---
+
+<style>
+body {
+text-align: justify}
+</style>
+
+<style>
+div.blue { background-color:#e6f0ff; border: 1px solid black; padding: 5px;}
+</style>
+
+<style>
+div.black { background-color:#8FBC8F; border: 1px solid black; padding: 5px;}
+</style>
+
+#Goal
+<div class = "blue">
+To predict the sale prices of homes in Ames, Ohio using the 79 variables provided. </div> 
+&nbsp;
+
+#Work Outline
+* **Data exploration**  
+     * Examining the data set
+     * Clean data:  
+        + *Check for missing values* 
+        + *Impute/Replace missing values*  
+        + *Change ordinal variables to numerical variables*  
+      * Visualize data and Calculate correlations  
+      * Handle Outliers  
+      * Feature Engineering  
+
+* **Hypothesis**  
+
+* **Model Building**  
+    * Analyzing variable distributions
+    * Transforming data
+    * Scaling data
+    * Removing Variables with low variance
+    * Creating dummy variables for categorical variables
+    * Since this is a prediction problem, I am planning to use a Gradient Boost and an XGBM model to predict sale prices
+
+#Data Exploration
+
+##Examining the data set
+
+* The data set consists of 1460 rows and 81 columns including the target column, **Sale Price** and **Id** a unique Id for each home
+* There are 79 columns describing various features of the house which can be divided into 6 categories:
+
+  1) Age attributes (5)  
+    -Year built, Yead Remod Add, YrSold, MoSold, GarageYrBlt  
+    
+  2) Location,lot and home style attributes (14)  
+    -Location - MSZoning, MSSubClass, Neighborhood, Street, Alley
+    -Lot - Lot Frontage, Lot Config, Lot shape, Landslope, LandContour
+    -Home style - Building type, House style, Street, Alley  
+    
+  3) Condition and Quality attributes (14)  
+    -Condition1, Condition2, ExterCond, ExterQual, BsmtQual, BsmtCond, KitchenQual, GarageQual,         GarageCond, HeatingQC, OverallQual, OverallCond, SaleCondition,PoolQC  
+    
+  4) Technical attributes (15)  
+    -RoofStyle, RoofMatl, Exterior1st, Exterior2nd, MasVnrType, MasVnrArea, Foundation,
+     BsmtExposure, Electrical, CentralAir, GarageType, GarageFinish, BsmtFinType1, BsmtFinType2,        Utilities, Heating  
+
+  5) Size attributes (22)  
+    -LotArea, GrLivArea, TotalBsmtSF, TotRmsAbvGrd, FullBath, HalfBath, BsmtFullBath, BsmtHalfBath,      BedroomAbvGr, KitchenAbvGr, GarageArea, WoodDeckSF, EnclosedPorch, OpenPorchSF, X3SsnPorch,        ScreenPorch,BsmtFinSF1, BsmtFinSF2, BsmtUnfSF, X1stFlrSF, X2ndFlrSF,LowQualFinSF
+  
+  6) Luxury attributes (7)  
+    -Fireplaces,GarageCars,Fence,MiscFeature,Pool Area, MiscVal,PavedDrive
+
+  7) Other (2)
+    -Saletype, Functional  
+
+*  There are 36 numeric columns and 42 categorical columns. Some of the categorical columns are ordinal and during the data cleaning stage, we will convert these to numerical variables.
+
+*  There is redundancy in some columns:  
+    -TotalBsmtSF is the sum of BsmtFinSF1, BsmtFinSF2 and BsmtUnSF.   
+    -GrLIvArea is the sum of X1stFlrSF, X2ndFlrSF and LowQualFinSF. 
+    
+* We will retain the TotalBsmtSF and GrlivArea and drop the other 6 columns. 
+
+* This leaves us with 73 columns to explore  
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,message=FALSE,warning=FALSE)
+#Loading the required libraries for analysis 
+library(tidyverse)
+library(mice)
+library(naniar)
+library(VIM)
+library(scales)
+library(gridExtra)
+library(moments)
+library(rcompanion)
+library(caret)
+library(gbm)
+library(xgboost)
+library(Metrics)
+library(corrplot)
+
+#Loading the training and test sets 
+test <- read.csv("/Users/spandana/Desktop/Data_science_projects/Houseprices/test.csv")
+train <- read.csv("/Users/spandana/Desktop/Data_science_projects/Houseprices/train.csv")
+
+#Creating a column for SalePrice in the test set to facilitate combining the training and test sets 
+test$SalePrice <- 0
+train_test <- rbind(train,test)
+
+```
+
+##Check for missing data
+
+```{r }
+options(repr.plot.width=12, repr.plot.height=8)
+#lets see if there are any missing values 
+#plotting the missing values in the data set. Note : Only looking for NA values here 
+
+p1 <- miss_var_summary(train_test) %>% filter(n_miss > 1) %>% ggplot(aes(x=reorder(variable,pct_miss),y=pct_miss))+geom_bar(stat="identity",fill="blue")+coord_flip()+ggtitle("Percent Missing Values")
+
+p1 <- p1 +theme_classic()+ geom_text(aes(label = paste(round(pct_miss,digits=1),"%",sep = '')),hjust = -.05)+theme(axis.title.x = element_blank(),axis.title.y=element_blank(),plot.title = element_text(hjust=0.5))
+
+p1 + theme(axis.text=element_text(size=12,face="bold"),title=element_text(size=12,face="bold"))
+
+```
+
+<div class = "black">
+* 3 columns (PoolQC, misc feature,and alley) have more than 90% missing values. Columns fence and fireplace quality have ~80% and ~49% missing values
+* All these columns are factor/categorical variables and the description text describes NA is either "Not Applicable" or "None" for all factor variable columns
+* This means that these five columns have big chunks of data which is a single value. So, we will not explore these features and drop these columns. 
+</div>
+
+##Data cleaning
+<div class = "black">
+* Drop 5 columns PoolQC, miscfeature, alley, fence, and fireplace quality
+* We will replace NA with NOTAPP in the remaining factor variables columns which consist NA values 
+* We will replace missing values with 0 for all numerical variables 
+* We will also convert 8 ordinal variable columns to numerical variables
+* Additionally, utilities, heating, street, condition2, and miscVal columns contain a single value. So, we will eliminate these columns since they wont be very useful for modeling.
+* So far, we have eliminated 15 columns which leaves us with 62 columns 
+</div>
+
+```{r replacing missing values}
+#Gathering all numeric and factor colnames and replacing NAs 
+train_test <- train_test%>% dplyr::select(!PoolQC&!Fence&!MiscFeature&!Alley&!FireplaceQu&!BsmtFinSF1&!BsmtFinSF2&!BsmtUnfSF&!PoolArea&!X1stFlrSF&!X2ndFlrSF&!LowQualFinSF&!Utilities&!MiscVal&!Heating&!Street&!Condition2)
+numeric_names <- names(train_test[,sapply(train_test,function(x){is.numeric(x)})])
+factor_names <- names(train_test[,sapply(train_test,function(x){!is.numeric(x)})])
+train_test[,numeric_names] <- sapply(train_test[,numeric_names],function(x){ifelse(is.na(x),0,x)})
+train_test[,factor_names] <- sapply(train_test[,factor_names],function(x){ifelse(is.na(x),"NOTAPP",as.character.factor(x))})
+
+
+#There seems to be a type in the GarageYrBlt Column. So, fixing that. 
+train_test[train_test[,'GarageYrBlt']==2207,'GarageYrBlt']=2007
+```
+
+```{r converting ordinal to numerical variables}
+#Since the data is clean now(no missing values or NAs), lets explore the data
+#Before we explore the data, we want to change some categorical variables to numeric
+train_test$ExterCond <- ifelse(train_test$ExterCond=="Po",0,
+                               ifelse(train_test$ExterCond=='Fa',1,
+                                ifelse(train_test$ExterCond=='TA',2,
+                                  ifelse(train_test$ExterCond=="Gd",3,4))))
+
+train_test$ExterQual <- ifelse(train_test$ExterQual=="Po",0,
+                               ifelse(train_test$ExterQual=='Fa',1,
+                                      ifelse(train_test$ExterQual=='TA',2,
+                                             ifelse(train_test$ExterQual=="Gd",3,4))))
+                  
+
+
+train_test$BsmtQual <- ifelse(train_test$BsmtQual=="Po"| train_test$BsmtQual=="NOTAPP",0,
+                               ifelse(train_test$BsmtQual=='Fa',1,
+                                      ifelse(train_test$BsmtQual=='TA',2,
+                                             ifelse(train_test$BsmtQual=="Gd",3,4))))
+
+
+train_test$BsmtCond <- ifelse(train_test$BsmtCond=="Po"| train_test$BsmtCond=="NOTAPP",0,
+                              ifelse(train_test$BsmtCond=='Fa',1,
+                                     ifelse(train_test$BsmtCond=='TA',2,
+                                            ifelse(train_test$BsmtCond=="Gd",3,4))))
+
+train_test$HeatingQC <- ifelse(train_test$HeatingQC=="Po"| train_test$HeatingQC=="NOTAPP",0,
+                               ifelse(train_test$HeatingQC=='Fa',1,
+                                      ifelse(train_test$HeatingQC=='TA',2,
+                                             ifelse(train_test$HeatingQC=="Gd",3,4))))
+
+train_test$GarageCond<- ifelse(train_test$GarageCond=="Po"| train_test$GarageCond=="NOTAPP",0,
+                               ifelse(train_test$GarageCond=='Fa',1,
+                                      ifelse(train_test$GarageCond=='TA',2,
+                                             ifelse(train_test$GarageCond=="Gd",3,4))))
+
+train_test$GarageQual <- ifelse(train_test$GarageQual=="Po"| train_test$GarageQual=="NOTAPP",0,
+                                 ifelse(train_test$GarageQual=='Fa',1,
+                                        ifelse(train_test$GarageQual=='TA',2,
+                                               ifelse(train_test$GarageQual=="Gd",3,4))))
+
+train_test$KitchenQual <- ifelse(train_test$KitchenQual=="Po"| train_test$KitchenQual=="NOTAPP",0,
+                                 ifelse(train_test$KitchenQual=='Fa',1,
+                                        ifelse(train_test$KitchenQual=='TA',2,
+                                               ifelse(train_test$KitchenQual=="Gd",3,4))))
+
+
+factor_names <- names(train_test[,sapply(train_test,function(x){!is.numeric(x)})])
+train_test[factor_names] <- lapply(train_test[factor_names],factor)
+
+```
+##Data Visualization & correlation values
+
+* For each category attribute as described in data description, we will calculate correlation values   
+* Plots and values are displayed for columns that have $R^2$>0.25 
+* Numerical variables are plotted as scatter plots while categorical variables are plotted as box plots
+
+
+```{r plot functions}
+#function to plot a scatter plot between two variables and print the plot out if R2>0.25
+scatter_plot <- function(df,xname,yname){
+    lm_model <- lm(df[,yname]~df[,xname])
+    if(summary(lm_model)$r.squared > 0.25){ 
+        p <- ggplot(df,aes_string(x=xname,y=yname))+geom_point(color="blue")+theme_classic()+
+             scale_y_continuous(labels=comma)+geom_smooth(method="lm",formula=y~x,se=F,color="red")+
+             geom_text(x=mean(df[,xname]),y=max(df[,yname]),label=paste("R2:",round(summary(lm_model)$r.squared,digits=2)),color="red",size=6)+
+             theme(axis.title=element_text(size=12,face="bold"),axis.text=element_text(size=12,face="bold"))
+             #ggtitle(paste(xname,"Vs",yname))       
+        print(p)
+    }
+}    
+
+#function to plot a boxplot between two variables and print the plot out if R2>0.25
+box_plot <- function(df,xname,yname){
+    lm_model <- lm(df[,yname]~as.factor(df[,xname]))
+    if(summary(lm_model)$r.squared > 0.25){
+        p<- ggplot(df,aes_string(x=xname,y=yname))+geom_boxplot()+geom_jitter(alpha=0.3,color="blue")+
+        scale_y_continuous(labels=comma)+ ggtitle(paste(xname,"Vs",yname))+
+        ggtitle(paste("R2:",round(summary(lm_model)$r.squared,digits=2)))+
+        theme(axis.text=element_text(angle=45,size=12,face="bold"),axis.title=element_text(size=12,face="bold"),plot.title=element_text(hjust=0.5,face="bold",color="red"))
+        print(p)
+    }
+}
+  
+#First split the data into train and test again
+train_recoded <- train_test %>% filter(SalePrice >0)
+test_recoded <- train_test %>% filter(SalePrice==0)
+```
+
+##Age attributes
+
+```{r age attributes}
+#lets explore if the age of the house has any effect on the Sale Price 
+options(repr.plot.width=8, repr.plot.height=5)
+temp_names <- c("YearBuilt","YearRemodAdd","YrSold","MoSold")
+for(i in temp_names){
+  scatter_plot(train_recoded,i,"SalePrice")
+}
+
+```
+
+<div class = "black">
+**Age of the house seems to have very little correlation with the saleprice**
+</div>
+
+##Location,lot and home style attributes 
+```{r }
+temp_names <- c("MSZoning","MSSubClass","Neighborhood","LotConfig","LotShape","LandSlope","LandContour","BldgType","HouseStyle")
+
+for(i in temp_names){
+ box_plot(train_recoded,i,"SalePrice")
+}
+```
+
+<div class = "black">
+**Of the 14 columns that describe location,lot, and home style attributes, Neighborhood is the only variable that shows a strong correlation to sale price**
+</div>
+
+##Condition and Quality attributes 
+```{r}
+temp_names <- c("Condition1","ExterCond","ExterQual","BsmtQual","BsmtCond","KitchenQual","GarageQual","GarageCond","HeatingQC","OverallQual","OverallCond","SaleCondition")
+for(i in temp_names){
+ scatter_plot(train_recoded,i,"SalePrice")
+}
+```
+
+<div class = "black">
+**External, Kitchen, basement, and overall quality show a strong correlation to sale price**
+</div>
+
+##Technical attributes 
+```{r}
+temp_names <- c("RoofStyle","RoofMatl","Exterior1st","Exterior2nd","MasVnrType","Foundation","BsmtExposure","Electrical","CentralAir","GarageType","GarageFinish","BsmtFinType1","BsmtFinType2")
+
+for(i in temp_names){
+  box_plot(train_recoded,i,"SalePrice")
+}
+
+scatter_plot(train_recoded,"MasVnrArea","SalePrice")
+```
+
+<div class = "black">
+**Garage Finish and Foundation show correlation to sale price.**
+</div>
+
+##Size attributes 
+```{r}
+temp_names <- c("LotArea","GrLivArea","TotalBsmtSF","TotRmsAbvGrd","FullBath","HalfBath","BsmtFullBath","BsmtHalfBath","BedroomAbvGr","KitchenAbvGr","GarageArea","WoodDeckSF","EnclosedPorch","OpenPorchSF","X3SsnPorch","ScreenPorch")
+
+for(i in temp_names){
+  scatter_plot(train_recoded,i,"SalePrice")
+}
+```
+
+<div class = "black">
+A number of size attributes have  $R^2$>0.3. Note that most of these attributes are related to indoor area.
+</div>
+
+##Luxury attributes 
+```{r}
+temp_names <- c("Fireplaces","GarageCars")
+for(i in temp_names){
+  scatter_plot(train_recoded,i,"SalePrice")
+}
+
+box_plot(train_recoded,"PavedDrive","SalePrice")
+
+```
+
+<div class = "black">
+Looks like people are willing to pay extra for a bigger garage but not for fireplaces. 
+</div>
+&nbsp;
+
+**Table of attributes that have $R^2$> 0.25**  
+
+| **Attribute**     | **$R^2$**         | 
+| ------------- |:-------------:| 
+|Foundation     | 0.26     |
+|Year RemodAdd| 0.26  |
+|Year Built     | 0.27|
+|TotRmsAbvGrd| 0.28|
+|Full Bath| 0.31|
+|Garage Finish| 0.31|
+|Total BsmtSF | 0.38  |
+|Bsmt Qual      | 0.39     |
+|Garage Area    | 0.39      |
+|Garage Cars    | 0.41 |
+|Kitchen Qual| 0.44|
+|ExterQual| 0.47|
+|GrLivinArea | 0.50 |
+|Neighborhood| 0.55|
+|Overall Qual | 0.63 |
+
+<div class = "black">
+* Based on  $R^2$  values, it seems like  Overall Quality, Neighborhood, and Gr Living Area(Above ground living area square feet) are the top features that have the strongest correlations (>=0.5) with sale price. 
+* External and Kitchen Quality also seem to have an affect on sale price.
+* It is interesting that while GrLivingArea has a strong impact, the TotRmsAbvGrd doesnt seem to have any impact. Does this mean that the total number of rooms in the house dont matter as long as there is enough space? 
+</div>
+
+## Handling outliers
+
+* Visualizing the data allowed us to observe some outliers. **TotalBsmtSF** and **GrLivingArea** show outliers when SF > 4000. So, lets examine these.
+
+```{r}
+#Outliers & Feature Engineering 
+#TotalBsmtSF and Total GrLiving Area show outliers >4000
+#Examining them
+
+train_recoded[train_recoded$GrLivArea>4000,c("Id","YearBuilt","GrLivArea","TotalBsmtSF","SalePrice")]
+
+#Removing these two outliers 
+train_nooutliers <- train_recoded[!(train_recoded$Id %in% c(524,1299)),]
+```
+
+<div class = "black">
+ It looks like despite being relatively newer homes and having a living area and basment area >4000 sqft, Ids 524 and 1299 have a really low price. Something seems wrong here. So, will eliminate these two data points to help modeling.
+ </div>
+
+#Feature Engineering
+<div class = "black">
+Based on our correlation results, lets build some new features  
+
+* GrLiving Area and TotalBsmt Sqft have a strong correlation with saleprice. It might be beneficial to add these two columns to create a new variable called **TotalIDRSF**
+* Notice that the size variables that had a correlation > 0.25 were all related to indoor area. None of the outdoor area variables showed a correlation. Maybe combining them all might change this. Combine all variables (6 columns) related to outdoor sqft to create a new variable called **TotalODRSF**
+* Combine TotalIDRSF and TotalODRSF to create **TotalSF**
+* Combine Full Baths and Half baths to create **TotalBaths**
+* We will also add columns **Total Age** and **RemodAge**  
+  -Totalage = Difference between year built and year sold
+  -Remodage = Difference between year built and RemodAdd 
+</div>
+
+```{r}
+train_nooutliers$TotalIDRSF <- train_nooutliers$GrLivArea+train_nooutliers$TotalBsmtSF
+test_recoded$TotalIDRSF <- test_recoded$GrLivArea + test_recoded$TotalBsmtSF
+train_nooutliers$TotalODRSF <- train_nooutliers$GarageArea+train_nooutliers$OpenPorchSF+train_nooutliers$EnclosedPorch+train_nooutliers$X3SsnPorch+train_nooutliers$WoodDeckSF+train_nooutliers$ScreenPorch
+test_recoded$TotalODRSF <- test_recoded$GarageArea+test_recoded$OpenPorchSF+test_recoded$EnclosedPorch+test_recoded$X3SsnPorch+test_recoded$WoodDeckSF+test_recoded$ScreenPorch
+train_nooutliers$TotalSF <- train_nooutliers$TotalIDRSF+train_nooutliers$TotalODRSF
+test_recoded$TotalSF <- test_recoded$TotalIDRSF+test_recoded$TotalODRSF
+train_nooutliers$TotalBaths <- train_nooutliers$FullBath+train_nooutliers$HalfBath+train_nooutliers$BsmtFullBath+train_nooutliers$BsmtHalfBath
+test_recoded$TotalBaths <- test_recoded$FullBath+test_recoded$HalfBath+test_recoded$BsmtFullBath+test_recoded$BsmtHalfBath
+train_nooutliers$TotalAge <- train_nooutliers$YrSold-train_nooutliers$YearBuilt
+test_recoded$TotalAge <- test_recoded$YrSold-test_recoded$YearBuilt
+train_nooutliers$RemodAge <- train_nooutliers$YrSold-train_nooutliers$YearRemodAdd
+test_recoded$RemodAge <- test_recoded$YrSold-test_recoded$YearRemodAdd
+
+
+```
+
+&nbsp;
+
+**Lets take a look at the $R^2$ values after removing the outliers and adding new feature columns**
+
+```{r printing tables}
+Sig_features <- c("Foundation","YearRemodAdd","YearBuilt","TotRmsAbvGrd","FullBath","GarageFinish","TotalBsmtSF","BsmtQual","GarageArea","GarageCars","KitchenQual","ExterQual","GrLivArea","Neighborhood","OverallQual","TotalIDRSF","TotalODRSF","TotalSF","TotalBaths","RemodAge","TotalAge")
+r2_table <- NULL
+for(i in colnames(train_nooutliers)){
+  if(i %in% Sig_features){
+  lm_new <- lm(train_nooutliers$SalePrice~train_nooutliers[,i])
+  if( i %in% colnames(train_recoded)){
+  temp_lm_old <- lm(train_recoded$SalePrice~train_recoded[,i])
+  lm_old <- round(summary(temp_lm_old)$r.squared,2)
+  }
+  else{
+    lm_old <- NA
+  }
+  if(summary(lm_new)$r.squared > 0.25 & i != "SalePrice"){
+    r2_table$name[[i]] <- i
+    r2_table$new_r2[[i]] <- round(summary(lm_new)$r.squared,2)
+    r2_table$old_r2[[i]] <- lm_old
+  }    
+}
+}    
+
+r2_table <- data.frame(r2_table)
+row.names(r2_table) <- NULL
+r2_table[order(r2_table$new_r2),]
+```
+<div class = "black">
+* Eliminating the two outliers has improved the $R^2$ values for GrLving Area and TotalBsmtSF
+
+* Four of the new features we added, Total IDRSF, TotalODRSF, TotalSF, and TotalBaths, show strong correlations. **Look at the Total SF!!!**
+
+* Adding all the outdoor spaces shows that the outdoor area can have a significant correlation however not as much as the indoor area. 
+
+* Of the 64 variables we explored, 21 variables including the 6 new variables we added seem to have an affect on Sale Price. 
+
+* The variables which, we used to create the new features, are redundant since they have the same information and probably exhibit collinearity. Lets take a look at the correlation matrix.
+</div>
+
+```{r}
+options(repr.plot.width=12, repr.plot.height=8)
+#correlation matrix
+Sig_features_numeric <- c("YearRemodAdd","YearBuilt","TotRmsAbvGrd","FullBath","TotalBsmtSF","BsmtQual","GarageArea","GarageCars","KitchenQual","ExterQual","GrLivArea","OverallQual","TotalIDRSF","TotalODRSF","TotalSF","TotalBaths","RemodAge","TotalAge")
+test <- round(cor(train_nooutliers[,Sig_features_numeric],use="pairwise.complete.obs"),digits=2)
+corrplot(test,method="color",type="upper",addCoef.col = "black",tl.col = "black",tl.srt = 45)
+
+```
+<div class = "black">
+* As expected, we observe collinearity between  
+  + IDRSF,ODRSF,GrLivArea,TotalBsmtSF and TotalSF  
+  + Garage Cars, Garage Area, and TotalODRSF  
+* We will eliminate columns with redundant information:  
+  + Remove IDRSF, ODRSF, GrLivArea, TotalBSmtSF, Garage Area, OpenPorchSF, ScreenPorch, EnclosedPorch, X3SsnPotch, WoodDeckSF = All of this is in the TotalSF variable  
+  + Remove Half Baths and Full Baths - retain Total Baths
+  + Remove YearRemodAdd and YearBuilt - retain TotalAge and RemodAge
+</div>
+```{r}
+
+train_nooutliers <- train_nooutliers %>% dplyr::select(!GrLivArea&!TotalBsmtSF&!TotalIDRSF&!TotalODRSF&!ScreenPorch&!GarageArea&!OpenPorchSF&!EnclosedPorch&!X3SsnPorch&!WoodDeckSF&!FullBath&!HalfBath&!YearRemodAdd&!YearBuilt)
+
+test_recoded <- test_recoded %>% dplyr::select(!GrLivArea&!TotalBsmtSF&!TotalIDRSF&!TotalODRSF&!ScreenPorch&!GarageArea&!OpenPorchSF&!EnclosedPorch&!X3SsnPorch&!WoodDeckSF&!FullBath&!HalfBath&!YearRemodAdd&!YearBuilt)
+
+#ncol(train_nooutliers)
+#ncol(test_recoded)
+```
+
+
+# Hypothesis
+<div class = "black">
+* Size of the house (TOTALSF - includes indoor and outdoor spaces such as porch,garage space but not the lot area) seems to be the most important feature that governs the price of the house followed by the overall quality and neighborhood.
+* External appearance and Kitchen Quality also have some affect on the sale price 
+</div>
+
+# Model Building 
+## Analayze distributions
+*  Before we beging modeling, we need to do a few more things 
+*  First we will **analyze distributions** of the target variable (**Sale price**) and other numerical variables that show a strong correlation to sale price
+
+```{r plot distributions}
+#Function to plot distributions and skew values 
+distbn_plot <- function(df,xname){
+    #print(max(df[,xname]))
+    #print(min(df[,xname]))
+  skew<-skewness(df[,xname])
+  bw=(max(df[,xname])-min(df[,xname]))/(20)
+  p <- ggplot(df,aes_string(xname))+geom_histogram(binwidth=bw,color="blue",alpha=0.6)+ theme_classic()+
+  ggtitle(paste("skew: ",round(skew,2)))+scale_x_continuous(labels=comma)+
+  theme(axis.title=element_text(face="bold",size=12),axis.text=element_text(face="bold",size=12),plot.title=element_text(hjust=0.5,face="bold",color="red"))
+  print(p)
+}  
+```
+
+**Sale Price**
+```{r}
+distbn_plot(train_nooutliers,"SalePrice")
+```
+
+<div class = "black">
+Looks like its right skewed. Lets try to transform this to a normal distribution by taking the log value
+</div>
+
+```{r}
+#Log transformation of the target variable 
+train_nooutliers_logSalePrice <- train_nooutliers
+train_nooutliers_logSalePrice$SalePrice <- log(train_nooutliers_logSalePrice$SalePrice)
+distbn_plot(train_nooutliers_logSalePrice,"SalePrice")
+```
+
+**Looks better!**
+&nbsp;
+
+*Lets take a look at the distributions of all the numerical variables*
+&nbsp;
+
+```{r}
+#Check the distbn of other strong numeric variables 
+temp_names <- c("OverallQual","TotalAge","RemodAge","ExterQual","BsmtQual","KitchenQual","TotRmsAbvGrd","GarageCars","TotalSF","TotalBaths")
+
+for(i in temp_names){
+ if(is.numeric(train_nooutliers[,i]) && i!="SalePrice"){
+   distbn_plot(train_nooutliers,i)
+ }
+}
+```
+
+**While most of them are normally distributed, there are a few variables that are not.**
+
+## Transform Variables 
+* Lets use a box-cox transformation to transform the numerical variables that are not normally distributed
+* We will use the **transformTukey** from the rcompanion package to do this 
+
+```{r}
+#Extracting all the names of numerical columns that are not normally distributed
+#Using a cut off value of 0.8 to determine if the variable is skewed 
+All_data <- rbind(train_nooutliers_logSalePrice,test_recoded)
+All_data <- data.frame(All_data)
+numeric_names <- names(All_data[,sapply(All_data,function(x){is.numeric(x)})])
+
+numeric_names_notarget <- numeric_names[numeric_names != "Id" & numeric_names != "SalePrice"]
+#numeric_names_notarget
+skewed <- sapply(All_data[,numeric_names_notarget],function(x) {ifelse(abs(skewness(x)) > .8,
+                                                                 "Yes","No")})
+skewed_colnames <- names(skewed[skewed=="Yes"])
+#skewed_colnames
+
+#tranforming data
+#Normalizing skewed numerical columns
+for(col in skewed_colnames)
+{
+  All_data[,col] <- transformTukey(All_data[,col],plotit=FALSE,quiet=TRUE)
+}
+```
+**Before we proceed further, lets check if the transformations effected the correlation values **
+
+```{r}
+r2_transformed_table <- NULL
+temp_names <- c("Foundation","OverallQual","TotalAge","RemodAge","ExterQual","BsmtQual","KitchenQual","TotRmsAbvGrd","GarageCars","TotalSF","TotalBaths","Neighborhood","GarageFinish")
+for(i in temp_names){
+  lm_model_new <- lm(train_nooutliers_logSalePrice[,"SalePrice"]~train_nooutliers_logSalePrice[,i])
+  lm_model_old <- lm(train_nooutliers[,"SalePrice"]~train_nooutliers[,i])  
+  r2_new <- round(summary(lm_model_new)$r.squared,2)
+  r2_old <- round(summary(lm_model_old)$r.squared,2)  
+  r2_transformed_table$name[[i]]<- i
+  r2_transformed_table$newr2[[i]] <- r2_new
+  r2_transformed_table$oldr2[[i]] <- r2_old  
+}
+
+r2_transformed_table <- data.frame(r2_transformed_table)
+row.names(r2_transformed_table)<- NULL
+r2_transformed_table[order(r2_transformed_table$newr2),]
+```
+#### A few more steps before modeling
+* We will use the ***caret*** package to accomplish these tasks 
+* lets center and scale the numeric variables 
+    * ***preProcess()*** 
+* Create dummy variables for categorical variables 
+    * ***dummyVars()*** 
+* Remove variables with low variance 
+    * ***nearZeroVar()***
+* Partition the data for modeling (70/30)   
+    * ***CreateDataPartition()*** 
+    
+```{r}
+#Scaling variables
+scaled_vals <- preProcess(All_data[,numeric_names_notarget], method=c("center", "scale"))
+All_data[,numeric_names_notarget] <- predict(scaled_vals,All_data[,numeric_names_notarget])
+
+
+#Creating dummy variables for catergorical variables
+dummies <- dummyVars(~ .,data = All_data)
+All_data <- predict(dummies,All_data)
+
+# Removing variables with low variance 
+All_data <- All_data[,-(nearZeroVar(All_data, freqCut = 98/2, uniqueCut = 2))]
+
+#Paritioning the data for modeling 
+All_data <- data.frame(All_data)
+train_premodel <- filter(All_data,SalePrice != 0)
+test_premodel <- filter(All_data,SalePrice == 0)
+set.seed(143)
+train_partition <- createDataPartition(train_premodel$SalePrice,p=0.7,list=F)
+train_model <- train_premodel[train_partition,]
+validate_model <- train_premodel[-train_partition,]
+
+print(paste("The training set has",nrow(train_model),"observations"))
+print(paste("Validation set has",nrow(validate_model),"observations"))
+```
+
+# Modeling 
+* Using **caret package** for modeling 
+
+## GBM model
+
+```{r}
+#GBM model
+set.seed(1)
+gbm_control <- trainControl(method="repeatedcv",number=5,repeats=5)
+gbm <- train(SalePrice~.,metric="RMSE",method="gbm",maximize=FALSE,trControl= gbm_control,
+       tuneGrid=expand.grid(n.trees=700,interaction.depth=5,shrinkage=0.05,n.minobsinnode=10),
+       data=train_model,verbose=FALSE)
+varImp(gbm)
+```
+
+```{r}
+gbm_pred <- predict(gbm,newdata=validate_model)
+print(paste("RMSE: ",rmse(validate_model$SalePrice,gbm_pred)))
+```
+
+##XGBM model
+```{r}
+#XGB model
+set.seed(1)
+#matrix
+xgbm_trainmatrix <- xgb.DMatrix(data = as.matrix(train_model[,-134]),label = as.matrix(train_model$SalePrice)) 
+xgbm_validatematrix <- xgb.DMatrix(data = as.matrix(validate_model[,-134]),label=as.matrix(validate_model$SalePrice))
+xgbm <-  xgboost(booster="gbtree",data = xgbm_trainmatrix, nfold = 5,nrounds = 2500, 
+                 verbose = FALSE, objective = "reg:linear", eval_metric = "rmse",
+                 nthread = 8, eta = 0.01, gamma = 0.0468, max_depth = 6,
+                 min_child_weight = 1.41, subsample = 0.769, colsample_bytree =0.283)
+mat <- xgb.importance (feature_names = colnames(xgbm_trainmatrix),model = xgbm)
+xgb.plot.importance (importance_matrix = mat[1:20]) 
+                 
+#applying the model on validation data                  
+xgbm_pred <- predict(xgbm,newdata = xgbm_validatematrix)
+print(paste("RMSE: ",rmse(validate_model$SalePrice,xgbm_pred)))
+```
+
+```{r}
+#Submission
+gbm_test_pred <- exp(predict(gbm,newdata=test_premodel))
+submission_gbm <- data.frame(Id = test_premodel$Id, SalePrice= gbm_test_pred)
+write.csv(submission_gbm, "submission_gbm.csv", row.names = FALSE) 
+#Kaggle Score
+
+xgbm_testmatrix <- xgb.DMatrix(data = as.matrix(test_premodel[,-134]),label=as.matrix(test_premodel$SalePrice))
+xgbm_test_pred <- exp(predict(xgbm,newdata=xgbm_testmatrix))
+submission_xgbm <- data.frame(Id = test_premodel$Id, SalePrice = xgbm_test_pred)
+write.csv(submission_xgbm,"submission_xgbm.csv",row.names=FALSE)
+#Kaggle Score 
+```
