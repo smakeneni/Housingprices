@@ -1,5 +1,5 @@
 ---
-title: "Housing"
+title: "Housing price prediction"
 author: "Spandana Makeneni"
 output: 
   html_document:
