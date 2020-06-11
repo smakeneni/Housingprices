@@ -111,8 +111,8 @@ library(Metrics)
 library(corrplot)
 
 #Loading the training and test sets 
-test <- read.csv("/Users/spandana/Desktop/Data_science_projects/Houseprices/test.csv")
-train <- read.csv("/Users/spandana/Desktop/Data_science_projects/Houseprices/train.csv")
+test <- read.csv("test.csv")
+train <- read.csv("train.csv")
 
 #Creating a column for SalePrice in the test set to facilitate combining the training and test sets 
 test$SalePrice <- 0
